@@ -18,7 +18,7 @@
   <script type="text/babel">
     const { useState, useEffect, useMemo } = React;
 
-    // ⚠️ 關鍵設定：請在此處貼上你在 Google Apps Script 取得的 Web 應用程式網址
+    // ⚠️ 關鍵設定：Google Apps Script Web 應用程式網址
     const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzTao0czCyqFFqX6UhKfWTBZ_S4eaRTwpDQZH6ygN50gZ_tBeXXi1rSpfLhR9s8cq3R/exec";
 
     // --- 圖示組件 ---
@@ -66,17 +66,16 @@
 
     function App() {
       const [currentMonday, setCurrentMonday] = useState(() => getMonday(new Date()));
+      const [selectedMonth, setSelectedMonth] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
       const [users, setUsers] = useState(['成員A', '成員B']);
       const [activeUser, setActiveUser] = useState('成員A');
       const [newUserInput, setNewUserInput] = useState('');
       const [schedules, setSchedules] = useState({});
-      const [viewMode, setViewMode] = useState('my-schedule');
+      const [viewMode, setViewMode] = useState('my-schedule'); // 'my-schedule' | 'team-summary' | 'month-summary'
       const [copied, setCopied] = useState(false);
       
-      // 雲端同步狀態
-      const [syncStatus, setSyncStatus] = useState('loading'); // 'loading' | 'synced' | 'saving' | 'error'
+      const [syncStatus, setSyncStatus] = useState('loading');
 
-      // 初始化：從 Google 試算表載入資料
       useEffect(() => {
         if (!GOOGLE_SCRIPT_URL || GOOGLE_SCRIPT_URL.includes("YOUR_GOOGLE_APPS_SCRIPT_URL_HERE")) {
           setSyncStatus('error');
@@ -98,7 +97,6 @@
           });
       }, []);
 
-      // 儲存至 Google 試算表
       const saveToCloud = (updatedUsers, updatedSchedules) => {
         if (!GOOGLE_SCRIPT_URL || GOOGLE_SCRIPT_URL.includes("YOUR_GOOGLE_APPS_SCRIPT_URL_HERE")) return;
         setSyncStatus('saving');
@@ -129,14 +127,44 @@
       const weekKey = useMemo(() => formatDateKey(currentMonday), [currentMonday]);
       const weekDays = useMemo(() => getWeekDays(currentMonday), [currentMonday]);
 
+      // 計算月排班的天數
+      const monthDaysList = useMemo(() => {
+        const year = selectedMonth.getFullYear();
+        const month = selectedMonth.getMonth();
+        const daysInMonth = new Date(year, month + 1, 0).getDate();
+        const dayNames = ['日', '一', '二', '三', '四', '五', '六'];
+        const list = [];
+
+        for (let d = 1; d <= daysInMonth; d++) {
+          const dateObj = new Date(year, month, d);
+          list.push({
+            dateObj,
+            dayNum: d,
+            dateStr: `${month + 1}/${d}`,
+            dayName: `週${dayNames[dateObj.getDay()]}`,
+            isWeekend: dateObj.getDay() === 0 || dateObj.getDay() === 6
+          });
+        }
+        return list;
+      }, [selectedMonth]);
+
       const changeWeek = (offsetWeeks) => {
         const nextMon = new Date(currentMonday);
         nextMon.setDate(nextMon.getDate() + offsetWeeks * 7);
         setCurrentMonday(nextMon);
       };
 
+      const changeMonth = (offsetMonths) => {
+        const nextM = new Date(selectedMonth.getFullYear(), selectedMonth.getMonth() + offsetMonths, 1);
+        setSelectedMonth(nextM);
+      };
+
       const resetToThisWeek = () => {
         setCurrentMonday(getMonday(new Date()));
+      };
+
+      const resetToThisMonth = () => {
+        setSelectedMonth(new Date(new Date().getFullYear(), new Date().getMonth(), 1));
       };
 
       const getSlotState = (userName, dayKey, shiftType) => {
@@ -144,6 +172,16 @@
         const userWeekData = schedules[weekKey]?.[userName] || {};
         const slotKey = `${dayKey}_${shiftType}`;
         return userWeekData[slotKey] || 'none';
+      };
+
+      // 查詢任意特定日期、特定使用者的狀態
+      const getSlotStateByDate = (userName, dateObj, shiftType) => {
+        if (!userName) return 'none';
+        const mon = getMonday(dateObj);
+        const wKey = formatDateKey(mon);
+        const dayIdx = (dateObj.getDay() + 6) % 7; // 週一為 0, 週日為 6
+        const userWeekData = schedules[wKey]?.[userName] || {};
+        return userWeekData[`day_${dayIdx}_${shiftType}`] || 'none';
       };
 
       const toggleSlotState = (dayKey, shiftType) => {
@@ -203,7 +241,7 @@
         weekDays.forEach(day => {
           text += `\n📌 ${day.name} (${day.dateStr})\n`;
           ['morning', 'evening'].forEach(shift => {
-            const shiftLabel = shift === 'morning' ? '☀️ 上午' : '🌙 晚上';
+            const shiftLabel = shift === 'morning' ? '☀️ 上午(10:30)' : '🌙 晚上(7:00)';
             const availableList = [];
             const flexibleList = [];
 
@@ -233,7 +271,6 @@
                   <IconCalendar /> 每週探班排表
                 </h1>
                 
-                {/* 狀態標籤 */}
                 {syncStatus === 'loading' && <span className="text-xs bg-amber-50 text-amber-600 px-2 py-1 rounded-full animate-pulse">☁️ 資料載入中...</span>}
                 {syncStatus === 'saving' && <span className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded-full animate-pulse">🔄 同步至試算表中...</span>}
                 {syncStatus === 'synced' && <span className="text-xs bg-emerald-50 text-emerald-600 px-2 py-1 rounded-full">☁️ 雲端同步完成</span>}
@@ -242,81 +279,92 @@
               <p className="text-slate-500 text-sm mt-1">點選名字與有空時間，資料會自動即時儲存至 Google 試算表</p>
             </div>
 
-            <div className="flex bg-slate-100 p-1 rounded-xl">
+            {/* 功能分頁按鈕 */}
+            <div className="flex bg-slate-100 p-1 rounded-xl gap-1">
               <button
                 onClick={() => setViewMode('my-schedule')}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition ${viewMode === 'my-schedule' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+                className={`px-3 py-2 rounded-lg text-xs sm:text-sm font-medium transition ${viewMode === 'my-schedule' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
               >
                 <IconUser /> 個人登記
               </button>
               <button
                 onClick={() => setViewMode('team-summary')}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition ${viewMode === 'team-summary' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+                className={`px-3 py-2 rounded-lg text-xs sm:text-sm font-medium transition ${viewMode === 'team-summary' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
               >
-                <IconUsers /> 排班總覽
+                <IconUsers /> 週排班總覽
+              </button>
+              <button
+                onClick={() => setViewMode('month-summary')}
+                className={`px-3 py-2 rounded-lg text-xs sm:text-sm font-medium transition ${viewMode === 'month-summary' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+              >
+                <IconCalendar /> 月排班總覽
               </button>
             </div>
           </header>
 
-          {/* 週別導覽 */}
-          <div className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 mb-6 flex flex-wrap justify-between items-center gap-3">
-            <div className="flex items-center gap-2">
-              <button onClick={() => changeWeek(-1)} className="p-2 hover:bg-slate-100 rounded-lg text-slate-600">
-                <IconChevronLeft />
-              </button>
-              <button onClick={resetToThisWeek} className="px-3 py-1.5 text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg">
-                回到本週
-              </button>
-              <button onClick={() => changeWeek(1)} className="p-2 hover:bg-slate-100 rounded-lg text-slate-600">
-                <IconChevronRight />
+          {/* 週排班與個人登記的週別導覽 */}
+          {viewMode !== 'month-summary' && (
+            <div className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 mb-6 flex flex-wrap justify-between items-center gap-3">
+              <div className="flex items-center gap-2">
+                <button onClick={() => changeWeek(-1)} className="p-2 hover:bg-slate-100 rounded-lg text-slate-600">
+                  <IconChevronLeft />
+                </button>
+                <button onClick={resetToThisWeek} className="px-3 py-1.5 text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg">
+                  回到本週
+                </button>
+                <button onClick={() => changeWeek(1)} className="p-2 hover:bg-slate-100 rounded-lg text-slate-600">
+                  <IconChevronRight />
+                </button>
+              </div>
+
+              <div className="text-lg font-bold text-slate-800">
+                {weekDays[0].dateStr} (一) ～ {weekDays[6].dateStr} (日)
+              </div>
+
+              <button 
+                onClick={copyLineSummary}
+                className="bg-emerald-50 text-emerald-600 hover:bg-emerald-100 px-3 py-2 rounded-xl text-sm font-medium transition flex items-center shadow-sm"
+              >
+                <IconCopy /> {copied ? '已複製！可到 LINE 貼上' : '複製 LINE 排班文字'}
               </button>
             </div>
-
-            <div className="text-lg font-bold text-slate-800">
-              {weekDays[0].dateStr} (一) ～ {weekDays[6].dateStr} (日)
-            </div>
-
-            <button 
-              onClick={copyLineSummary}
-              className="bg-emerald-50 text-emerald-600 hover:bg-emerald-100 px-3 py-2 rounded-xl text-sm font-medium transition flex items-center shadow-sm"
-            >
-              <IconCopy /> {copied ? '已複製！可到 LINE 貼上' : '複製 LINE 排班文字'}
-            </button>
-          </div>
+          )}
 
           {/* 成員區 */}
-          <div className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 mb-6">
-            <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">成員名單 (點選切換 / 按 ✕ 刪除)</div>
-            <div className="flex flex-wrap items-center gap-2">
-              {users.map(u => (
-                <div
-                  key={u}
-                  onClick={() => setActiveUser(u)}
-                  className={`px-3 py-1.5 rounded-xl text-sm font-medium transition cursor-pointer flex items-center gap-2 ${activeUser === u ? 'bg-indigo-600 text-white shadow-md shadow-indigo-100' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
-                >
-                  <span>{u}</span>
-                  <button
-                    onClick={(e) => handleDeleteUser(u, e)}
-                    className={`w-4 h-4 rounded-full flex items-center justify-center text-xs hover:bg-red-500 hover:text-white transition ${activeUser === u ? 'text-indigo-200' : 'text-slate-400'}`}
+          {viewMode !== 'month-summary' && (
+            <div className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 mb-6">
+              <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">成員名單 (點選切換 / 按 ✕ 刪除)</div>
+              <div className="flex flex-wrap items-center gap-2">
+                {users.map(u => (
+                  <div
+                    key={u}
+                    onClick={() => setActiveUser(u)}
+                    className={`px-3 py-1.5 rounded-xl text-sm font-medium transition cursor-pointer flex items-center gap-2 ${activeUser === u ? 'bg-indigo-600 text-white shadow-md shadow-indigo-100' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
                   >
-                    ✕
-                  </button>
-                </div>
-              ))}
+                    <span>{u}</span>
+                    <button
+                      onClick={(e) => handleDeleteUser(u, e)}
+                      className={`w-4 h-4 rounded-full flex items-center justify-center text-xs hover:bg-red-500 hover:text-white transition ${activeUser === u ? 'text-indigo-200' : 'text-slate-400'}`}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
 
-              <form onSubmit={handleAddUser} className="flex items-center">
-                <input
-                  type="text"
-                  placeholder="+ 輸入名字 Enter"
-                  value={newUserInput}
-                  onChange={(e) => setNewUserInput(e.target.value)}
-                  className="px-3 py-1.5 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-500 w-36"
-                />
-              </form>
+                <form onSubmit={handleAddUser} className="flex items-center">
+                  <input
+                    type="text"
+                    placeholder="+ 輸入名字 Enter"
+                    value={newUserInput}
+                    onChange={(e) => setNewUserInput(e.target.value)}
+                    className="px-3 py-1.5 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-500 w-36"
+                  />
+                </form>
+              </div>
             </div>
-          </div>
+          )}
 
-          {/* 個人點選 */}
+          {/* 區塊 1: 個人點選 */}
           {viewMode === 'my-schedule' && (
             <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100">
               <div className="flex justify-between items-center mb-4">
@@ -370,7 +418,7 @@
             </div>
           )}
 
-          {/* 排班總覽 */}
+          {/* 區塊 2: 週排班總覽 */}
           {viewMode === 'team-summary' && (
             <div className="bg-white rounded-2xl p-6 shadow-sm border border-slate-100 overflow-x-auto">
               <h2 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
@@ -428,6 +476,119 @@
                   )}
                 </tbody>
               </table>
+            </div>
+          )}
+
+          {/* 區塊 3: 月排班總覽 (手機友善，直向卡片無須左右滑動) */}
+          {viewMode === 'month-summary' && (
+            <div className="space-y-4">
+              {/* 月份導覽控制列 */}
+              <div className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 flex flex-wrap justify-between items-center gap-3">
+                <div className="flex items-center gap-2">
+                  <button onClick={() => changeMonth(-1)} className="p-2 hover:bg-slate-100 rounded-lg text-slate-600">
+                    <IconChevronLeft />
+                  </button>
+                  <button onClick={resetToThisMonth} className="px-3 py-1.5 text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg">
+                    回到本月
+                  </button>
+                  <button onClick={() => changeMonth(1)} className="p-2 hover:bg-slate-100 rounded-lg text-slate-600">
+                    <IconChevronRight />
+                  </button>
+                </div>
+
+                <div className="text-lg font-bold text-slate-800">
+                  {selectedMonth.getFullYear()} 年 {selectedMonth.getMonth() + 1} 月
+                </div>
+
+                <div className="text-xs text-slate-400">
+                  共 {monthDaysList.length} 天
+                </div>
+              </div>
+
+              {/* 手機優化：直向響應式日期卡片瀑布流 */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {monthDaysList.map(day => {
+                  const mAvailable = [];
+                  const mFlexible = [];
+                  const eAvailable = [];
+                  const eFlexible = [];
+
+                  users.forEach(u => {
+                    const mState = getSlotStateByDate(u, day.dateObj, 'morning');
+                    const eState = getSlotStateByDate(u, day.dateObj, 'evening');
+
+                    if (mState === 'available') mAvailable.push(u);
+                    if (mState === 'flexible') mFlexible.push(u);
+
+                    if (eState === 'available') eAvailable.push(u);
+                    if (eState === 'flexible') eFlexible.push(u);
+                  });
+
+                  return (
+                    <div 
+                      key={day.dateStr} 
+                      className={`bg-white rounded-xl p-4 shadow-sm border transition ${day.isWeekend ? 'border-amber-200 bg-amber-50/20' : 'border-slate-100'}`}
+                    >
+                      {/* 卡片日期標頭 */}
+                      <div className="flex justify-between items-center pb-2 border-b border-slate-100 mb-2">
+                        <span className="font-bold text-slate-800 text-base">
+                          {day.dateStr} <span className={`text-xs px-1.5 py-0.5 rounded ${day.isWeekend ? 'bg-amber-100 text-amber-700' : 'text-slate-500'}`}>{day.dayName}</span>
+                        </span>
+                        <span className="text-[11px] text-slate-400">
+                          {mAvailable.length + mFlexible.length + eAvailable.length + eFlexible.length > 0 ? '已有排班' : '無人填寫'}
+                        </span>
+                      </div>
+
+                      {/* 早晚探班人員名單 */}
+                      <div className="space-y-2 text-xs">
+                        {/* 上午段 */}
+                        <div className="flex items-start gap-2">
+                          <span className="font-semibold text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded whitespace-nowrap">
+                            <IconSun /> 早 10:30
+                          </span>
+                          <div className="flex flex-wrap gap-1 items-center pt-0.5">
+                            {mAvailable.map(u => (
+                              <span key={u} className="bg-emerald-500 text-white font-medium px-2 py-0.5 rounded-full text-[11px]">
+                                {u}
+                              </span>
+                            ))}
+                            {mFlexible.map(u => (
+                              <span key={u} className="bg-amber-400 text-slate-900 font-medium px-2 py-0.5 rounded-full text-[11px]">
+                                {u}(彈性)
+                              </span>
+                            ))}
+                            {mAvailable.length === 0 && mFlexible.length === 0 && (
+                              <span className="text-slate-300">無</span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* 晚上段 */}
+                        <div className="flex items-start gap-2">
+                          <span className="font-semibold text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded whitespace-nowrap">
+                            <IconMoon /> 晚 19:00
+                          </span>
+                          <div className="flex flex-wrap gap-1 items-center pt-0.5">
+                            {eAvailable.map(u => (
+                              <span key={u} className="bg-emerald-500 text-white font-medium px-2 py-0.5 rounded-full text-[11px]">
+                                {u}
+                              </span>
+                            ))}
+                            {eFlexible.map(u => (
+                              <span key={u} className="bg-amber-400 text-slate-900 font-medium px-2 py-0.5 rounded-full text-[11px]">
+                                {u}(彈性)
+                              </span>
+                            ))}
+                            {eAvailable.length === 0 && eFlexible.length === 0 && (
+                              <span className="text-slate-300">無</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           )}
         </div>
